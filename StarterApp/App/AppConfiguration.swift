@@ -26,6 +26,8 @@ enum AppConfiguration {
     static let monthlyProductID = "com.hoangbkit.starterapp.pro.monthly"
     static let yearlyProductID = "com.hoangbkit.starterapp.pro.yearly"
 
+    private static let purchaseModeEnvironmentKey = "APPFOUNDATION_PURCHASE_MODE"
+
     static var simulatedPurchaseModeDefaultsKey: String {
         "\(bundleIdentifier).developer.simulated-purchases-enabled"
     }
@@ -71,7 +73,8 @@ enum AppConfiguration {
 
     static var isSimulatedPurchaseModeEnabled: Bool {
         #if DEBUG
-        UserDefaults.standard.bool(forKey: simulatedPurchaseModeDefaultsKey)
+        ProcessInfo.processInfo.environment[purchaseModeEnvironmentKey] == "simulated"
+            || UserDefaults.standard.bool(forKey: simulatedPurchaseModeDefaultsKey)
         #else
         false
         #endif
@@ -117,7 +120,7 @@ enum AppConfiguration {
                 id: "all-features",
                 systemImage: "checkmark",
                 title: "All Pro features",
-                message: "Unlock every premium feature in \(displayName)."
+                message: "Unlock every Pro feature in \(displayName)."
             ),
             FoundationPaywallFeature(
                 id: "themes-icons",
@@ -146,7 +149,7 @@ enum AppConfiguration {
     static func makePurchaseManager() -> PurchaseManager {
         PurchaseManager(
             configuration: purchaseConfiguration,
-            simulated: true,
+            simulated: isSimulatedPurchaseModeEnabled,
             simulatedProducts: simulatedProducts,
             simulatedPersistenceKey: simulatedPurchasePersistenceKey
         )
