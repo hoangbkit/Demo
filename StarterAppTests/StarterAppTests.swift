@@ -71,6 +71,26 @@ final class StarterAppTests: XCTestCase {
         #endif
     }
 
+    func testPurchaseManagerUsesLiveModeByDefault() {
+        #if DEBUG
+        let defaults = UserDefaults.standard
+        let key = AppConfiguration.simulatedPurchaseModeDefaultsKey
+        let previousValue = defaults.object(forKey: key)
+        defer {
+            if let previousValue {
+                defaults.set(previousValue, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+
+        defaults.removeObject(forKey: key)
+        XCTAssertFalse(AppConfiguration.isSimulatedPurchaseModeEnabled)
+        #else
+        XCTAssertFalse(AppConfiguration.isSimulatedPurchaseModeEnabled)
+        #endif
+    }
+
     func testRouterStartsWithOnboardingAndPersistsCompletion() {
         let suiteName = "StarterAppTests.\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {
