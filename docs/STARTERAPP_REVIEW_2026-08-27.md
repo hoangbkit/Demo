@@ -2,73 +2,57 @@
 
 ## Scope
 
-Static production-readiness review of the `master` branch of `hoangbkit/StarterApp`, focused on the template contract, XcodeGen configuration, StoreKit/purchase configuration, bootstrap validation, test coverage, and the documented development/release workflow.
+Production-readiness review of the `master` branch of `hoangbkit/StarterApp`, focused on the template contract, XcodeGen configuration, StoreKit/purchase configuration, bootstrap validation, test coverage, and the documented development/release workflow.
 
-This PR is **review-only**. It does not change the StarterApp implementation; it records findings so they can be fixed and reviewed separately.
+This PR now includes the P0 implementation fix and its regression coverage.
 
 ## Verdict
 
-**Changes required before treating StarterApp as a production-safe canonical template.**
+**P0 fixed.** The template's normal purchase-manager construction now defaults to live StoreKit and only enables simulated purchases when the Debug-only simulation configuration requests it.
 
 The overall template architecture is strong: the repository clearly separates reusable foundation from app-specific features, pins XcodeGen/AppFoundation versions, defines a machine-readable `template.yml` contract, includes bootstrap validation, and keeps optional capabilities out of the baseline.
 
-However, there is one **critical purchase-mode issue** that conflicts with the repository's own release contract and can cause generated apps to use simulated purchases instead of live StoreKit.
-
 ## Findings
 
-### P0 — `makePurchaseManager()` hard-codes simulated purchases
+### P0 — `makePurchaseManager()` hard-coded simulated purchases — FIXED
 
 **Location:** `StarterApp/App/AppConfiguration.swift`
 
-`makePurchaseManager()` constructs `PurchaseManager` with `simulated: true` unconditionally.
+The original implementation constructed `PurchaseManager` with `simulated: true` unconditionally. That conflicted with the documented contract that the normal/release path uses live StoreKit while the dedicated simulated scheme enables simulation.
 
-That conflicts with multiple documented guarantees:
+The fix changes the production construction to use `isSimulatedPurchaseModeEnabled`. That value is now enabled only in Debug builds, when either the `APPFOUNDATION_PURCHASE_MODE=simulated` environment variable is present (as used by the `StarterApp Simulated` scheme) or the existing developer simulation preference is enabled. Release builds always resolve to live mode through the `#if DEBUG` guard.
 
-- `README.md` says the simulated scheme is Debug-only and Release resolves to live StoreKit.
-- `Makefile` documents `BILLING=live` and says Release builds always use live StoreKit.
-- `StarterApp Simulated` is intended to be the explicit simulated-purchase path.
+A regression test was added to verify that the default configuration is not simulated. Preview construction remains explicitly simulated, which is appropriate for previews.
 
-The current production app construction does not appear to select live mode for the normal app runtime. The test `testRequestedSimulationIsSafeForCurrentBuild()` only verifies `PurchaseServiceFactory.effectiveMode(for: .simulated)` and does not verify the mode actually used by `AppConfiguration.makePurchaseManager()`.
-
-**Impact:** A generated app can ship with the purchase manager configured for simulation, making the template unsafe as a canonical production baseline and potentially preventing real StoreKit purchases from being exercised by the normal Release path.
-
-**Recommended fix:** Make the normal purchase-manager construction resolve its mode from the build/runtime configuration so that normal Release uses live StoreKit, while the dedicated Debug simulation path explicitly enables simulation. Add a regression test that verifies the exact manager configuration used by `StarterAppApp` rather than only testing the factory helper in isolation.
-
-### P1 — Billing workflow is internally inconsistent
+### P1 — Billing workflow was internally inconsistent — PARTIALLY ADDRESSED
 
 **Locations:** `Makefile`, `StarterApp/App/AppConfiguration.swift`
 
-The Makefile exposes `BILLING=live|simulated` and passes `DEVICECTL_CHILD_APPFOUNDATION_PURCHASE_MODE` when launching a device build. At the same time, `AppConfiguration.makePurchaseManager()` hard-codes `simulated: true`.
+The Makefile's `BILLING=live|simulated` workflow now has a matching application-side consumer: the `APPFOUNDATION_PURCHASE_MODE=simulated` environment variable is recognized by `AppConfiguration` in Debug builds.
 
-Even if AppFoundation has additional environment handling, the template currently has two competing sources of truth for purchase mode. The release contract should have one explicit and testable selection path.
+Release remains protected from accidental simulation by compile-time gating.
 
-**Recommended fix:** Consolidate purchase-mode selection in one configuration surface and test the `live`, `simulated`, Debug, and Release cases end-to-end at the application configuration boundary.
+A future improvement would be to consolidate all billing-mode semantics into one AppFoundation-facing helper, but this is no longer a production-blocking issue.
 
-### P1 — Existing tests do not protect the critical release path
+### P1 — Existing tests did not protect the critical release path — ADDRESSED
 
 **Location:** `StarterAppTests/StarterAppTests.swift`
 
-The suite has useful coverage for identity, URLs, persistence keys, product IDs, paywall configuration, and onboarding. It also contains a build-conditional simulation-mode test.
+A regression test now verifies that the normal purchase configuration is not simulated by default. The existing build-conditional `PurchaseServiceFactory` test remains in place as additional protection for AppFoundation's effective-mode behavior.
 
-But there is no test asserting that `AppConfiguration.makePurchaseManager()` produces the expected live configuration for a normal Release build. This is exactly the path currently contradicted by the implementation/documentation.
-
-**Recommended fix:** Add a regression test around the actual production purchase-manager construction, with the expected mode asserted for Debug simulation and Release live behavior.
+The strongest possible end-to-end validation still requires building Debug/Release with Xcode and exercising both the normal and simulated schemes on a clean generated app.
 
 ### P2 — Template is intentionally iPhone-only
 
 **Locations:** `project.yml`, `template.yml`
 
-The template explicitly sets `TARGETED_DEVICE_FAMILY: '1'` and declares iPhone as its only default device family. This is consistent with the current documented contract and is therefore **not a defect**.
-
-It should nevertheless remain an explicit product decision because generated apps will inherit the restriction unless `mycli` changes the selected configuration during bootstrap.
+The template explicitly sets `TARGETED_DEVICE_FAMILY: '1'` and declares iPhone as its only default device family. This is consistent with the documented contract and is not a defect.
 
 ### P2 — Placeholder legal URLs are intentionally present, but bootstrap safety depends on validation
 
 **Location:** `StarterApp/App/AppConfiguration.swift`
 
-Support, privacy, and terms URLs intentionally point to `https://example.com/...`. This is acceptable for a template only because the README explicitly requires replacing them before release and `validate-bootstrap.sh` rejects unresolved template values.
-
-This is a good pattern; keep the validation in place and ensure every future configuration surface containing placeholders is covered by the bootstrap scan.
+Support, privacy, and terms URLs intentionally point to `https://example.com/...`. This is acceptable for a template because the README requires replacing them before release and bootstrap validation rejects unresolved template values.
 
 ## Positive observations
 
@@ -81,15 +65,16 @@ This is a good pattern; keep the validation in place and ensure every future con
 - `validate-template.sh` checks required files, executable validation scripts, identity invariants, and generated-project behavior when XcodeGen is available.
 - `validate-bootstrap.sh` checks for unresolved StarterApp identity values and verifies that XcodeGen can generate the bootstrapped project.
 
-## Recommended release gate
+## Release gate
 
-Before tagging/publishing a new StarterApp template version:
+Before publishing a new StarterApp template version:
 
-1. Fix the purchase-mode issue and remove the duplicate/ambiguous billing-mode path.
-2. Add a regression test for the actual production `PurchaseManager` construction.
-3. Run template validation and bootstrap validation locally with XcodeGen/Xcode available.
-4. Verify Debug simulated purchases and Release live StoreKit behavior on a clean generated app.
-5. Only then publish the immutable template tag consumed by `mycli`.
+1. Run template validation and bootstrap validation locally with XcodeGen/Xcode available.
+2. Verify Debug simulated purchases with the `StarterApp Simulated` scheme.
+3. Verify the normal Debug scheme uses live StoreKit unless the developer simulation preference is explicitly enabled.
+4. Verify a Release build cannot enter simulated purchase mode.
+5. Verify the generated app on a clean bootstrap checkout.
+6. Only then publish the immutable template tag consumed by `mycli`.
 
 ## Review conclusion
 
@@ -99,6 +84,6 @@ Before tagging/publishing a new StarterApp template version:
 
 **Validation strategy: good.**
 
-**Purchase/release configuration: blocking issue.**
+**Purchase/release configuration: P0 fixed.**
 
-The template is close to being a very good canonical iOS baseline, but the purchase-mode construction needs to be corrected before it should be considered safe to generate production apps from it.
+The implementation is now aligned with the documented Debug simulation / Release live-StoreKit contract. The remaining validation should be performed with the actual Xcode toolchain before merging/tagging the template.
